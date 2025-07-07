@@ -1,16 +1,21 @@
 from fastapi import FastAPI, Query
-from typing import Optional
+from pydantic import BaseModel
+from typing import Optional, List
+from fastapi.openapi.utils import get_openapi
 
-app = FastAPI()
+app = FastAPI(title="eBay AI Assistant", version="1.0.0")
 
+# === Root Welcome Endpoint ===
 @app.get("/")
 def read_root():
     return {"message": "Your GPT-powered eBay Assistant is running!"}
 
+# === Simple Greeting Endpoint ===
 @app.get("/hello")
 def say_hello(name: str = "there"):
     return {"message": f"Hello, {name}!"}
 
+# === Simulated eBay Price Lookup (for testing without real API) ===
 @app.get("/fake_ebay_search")
 def fake_ebay_search(
     query: str,
@@ -18,6 +23,7 @@ def fake_ebay_search(
     min_price: Optional[float] = None,
     max_price: Optional[float] = None
 ):
+    # Simulated local database
     sample_database = {
         "iphone 14": [
             {"title": "iPhone 14 - 128GB - Unlocked", "price": 329.99, "category": "electronics"},
@@ -37,7 +43,7 @@ def fake_ebay_search(
     }
 
     results = sample_database.get(query.lower(), [])
-    
+
     # Apply optional filters
     filtered_results = [
         item for item in results
@@ -63,11 +69,8 @@ def fake_ebay_search(
         "items_found": len(filtered_results),
         "results": filtered_results
     }
-    from fastapi import FastAPI
-from pydantic import BaseModel
 
-app = FastAPI()
-
+# === Simple GPT Echo Endpoint ===
 class PromptRequest(BaseModel):
     prompt: str
 
@@ -75,27 +78,14 @@ class PromptRequest(BaseModel):
 def ask_endpoint(data: PromptRequest):
     return {"reply": f"You said: {data.prompt}"}
 
-from fastapi import FastAPI
-from pydantic import BaseModel
-from fastapi.openapi.utils import get_openapi
-
-app = FastAPI()
-
-class PromptRequest(BaseModel):
-    prompt: str
-
-@app.post("/ask")
-def ask_endpoint(data: PromptRequest):
-    return {"reply": f"You said: {data.prompt}"}
-
-
+# === Custom OpenAPI Docs URL (for GPT integration) ===
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
     openapi_schema = get_openapi(
-        title="eBay AI Assistant",
-        version="1.0.0",
-        description="Simple echo service",
+        title=app.title,
+        version=app.version,
+        description="Simulated eBay AI Assistant API for GPT interaction.",
         routes=app.routes,
     )
     openapi_schema["servers"] = [{"url": "https://ebay-ai-backend.onrender.com"}]
