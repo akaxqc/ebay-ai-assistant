@@ -36,15 +36,13 @@ def get_ebay_access_token():
     }
     data = {
         "grant_type": "client_credentials",
-        "scope": "https://api.ebay.com/oauth/api_scope/buy.browse"
+        "scope": "https://api.ebay.com/oauth/api_scope"
     }
 
     response = requests.post(token_url, headers=headers, data=data)
-    if response.status_code != 200:
-        print("OAuth error:", response.status_code, response.text)
     response.raise_for_status()
-
     result = response.json()
+
     access_token_cache["token"] = result["access_token"]
     access_token_cache["expires_at"] = time.time() + int(result["expires_in"]) - 60
 
