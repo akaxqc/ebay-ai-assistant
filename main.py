@@ -1,17 +1,19 @@
 from fastapi import FastAPI, Query
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional
 import requests
-import hashlib
 import time
+import os
+from dotenv import load_dotenv
 from base64 import b64encode
 
-app = FastAPI(title="eBay AI Assistant", version="2.0.0")
-
-# === eBay API Credentials ===
-EBAY_CLIENT_ID = "DanyAziz-akaxqc-PRD-8ca4033b2-3ebe98a8"
-EBAY_CLIENT_SECRET = "PRD-ca4033b2c96e-3fb3-45ba-a331-b00a"
+# === Load .env credentials ===
+load_dotenv()
+EBAY_CLIENT_ID = os.getenv("EBAY_CLIENT_ID")
+EBAY_CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET")
 EBAY_MARKETPLACE_ID = "EBAY_US"
+
+app = FastAPI(title="eBay AI Assistant", version="2.0.0")
 
 # === Global Token Cache ===
 access_token_cache = {
@@ -98,4 +100,3 @@ class PromptRequest(BaseModel):
 @app.post("/ask")
 def ask_endpoint(data: PromptRequest):
     return {"reply": f"You said: {data.prompt}"}
-    
