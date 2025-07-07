@@ -49,11 +49,11 @@ def get_ebay_access_token():
     return result["access_token"]
 
 # === Real eBay Price Check Endpoint ===
-@app.get("/price-check-live")
-def price_check_live(query: str, limit: int = 5):
+@app.get("/price-check-live", operation_id="price_check_live")
+def price_check_live(query: str = Query(..., description="Search term"), limit: int = Query(5, ge=1, le=20)):
     token = get_ebay_access_token()
 
-    url = f"https://api.ebay.com/buy/browse/v1/item_summary/search"
+    url = "https://api.ebay.com/buy/browse/v1/item_summary/search"
     params = {
         "q": query,
         "limit": limit
@@ -71,14 +71,27 @@ def price_check_live(query: str, limit: int = 5):
     if not items:
         return {"query": query, "message": "No results found."}
 
-    prices = [float(item["price"]["value"]) for item in items if "price" in item]
+    # === Safe price extraction ===
+    prices = []
+    for item in items:
+        price_info = item.get("price", {})
+        value = price_info.get("value")
+        if value is not None:
+            try:
+                prices.append(float(value))
+            except ValueError:
+                continue
+
+    if not prices:
+        return {"query": query, "message": "No valid prices found."}
+
     avg_price = round(sum(prices) / len(prices), 2)
 
     simplified_results = [
         {
             "title": item.get("title"),
-            "price": item["price"]["value"],
-            "currency": item["price"]["currency"],
+            "price": item.get("price", {}).get("value"),
+            "currency": item.get("price", {}).get("currency"),
             "url": item.get("itemWebUrl")
         }
         for item in items
@@ -97,6 +110,6 @@ def price_check_live(query: str, limit: int = 5):
 class PromptRequest(BaseModel):
     prompt: str
 
-@app.post("/ask")
+@app.post("/ask", operation_id="ask_endpoint")
 def ask_endpoint(data: PromptRequest):
     return {"reply": f"You said: {data.prompt}"}
