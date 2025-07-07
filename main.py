@@ -7,7 +7,7 @@ import os
 from dotenv import load_dotenv
 from base64 import b64encode
 
-# === Load .env credentials ===
+# === Load credentials from .env ===
 load_dotenv()
 EBAY_CLIENT_ID = os.getenv("EBAY_CLIENT_ID")
 EBAY_CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET")
@@ -15,13 +15,18 @@ EBAY_MARKETPLACE_ID = "EBAY_US"
 
 app = FastAPI(title="eBay AI Assistant", version="2.0.0")
 
-# === Global Token Cache ===
+# === Global token cache ===
 access_token_cache = {
     "token": None,
     "expires_at": 0
 }
 
-# === OAuth Token Fetcher ===
+# === Root route (prevents 404 on Render home) ===
+@app.get("/")
+def root():
+    return {"status": "🟢 eBay AI Backend is running."}
+
+# === OAuth: get eBay access token ===
 def get_ebay_access_token():
     if time.time() < access_token_cache["expires_at"]:
         return access_token_cache["token"]
@@ -36,7 +41,7 @@ def get_ebay_access_token():
     }
     data = {
         "grant_type": "client_credentials",
-        "scope": "https://api.ebay.com/oauth/api_scope"
+        "scope": "https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/buy.browse"
     }
 
     response = requests.post(token_url, headers=headers, data=data)
@@ -48,16 +53,13 @@ def get_ebay_access_token():
 
     return result["access_token"]
 
-# === Real eBay Price Check Endpoint ===
+# === Price Check Endpoint (live listings only) ===
 @app.get("/price-check-live", operation_id="price_check_live")
 def price_check_live(query: str = Query(..., description="Search term"), limit: int = Query(5, ge=1, le=20)):
     token = get_ebay_access_token()
 
     url = "https://api.ebay.com/buy/browse/v1/item_summary/search"
-    params = {
-        "q": query,
-        "limit": limit
-    }
+    params = {"q": query, "limit": limit}
     headers = {
         "Authorization": f"Bearer {token}",
         "X-EBAY-C-MARKETPLACE-ID": EBAY_MARKETPLACE_ID,
@@ -71,16 +73,13 @@ def price_check_live(query: str = Query(..., description="Search term"), limit: 
     if not items:
         return {"query": query, "message": "No results found."}
 
-    # === Safe price extraction ===
     prices = []
     for item in items:
-        price_info = item.get("price", {})
-        value = price_info.get("value")
-        if value is not None:
-            try:
-                prices.append(float(value))
-            except ValueError:
-                continue
+        try:
+            value = float(item.get("price", {}).get("value", 0))
+            prices.append(value)
+        except (ValueError, TypeError):
+            continue
 
     if not prices:
         return {"query": query, "message": "No valid prices found."}
@@ -106,7 +105,7 @@ def price_check_live(query: str = Query(..., description="Search term"), limit: 
         "items": simplified_results
     }
 
-# === Optional Echo Endpoint for GPT ===
+# === Optional echo endpoint for GPT testing ===
 class PromptRequest(BaseModel):
     prompt: str
 
