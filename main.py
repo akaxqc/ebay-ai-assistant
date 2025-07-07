@@ -1,122 +1,70 @@
-from fastapi import FastAPI, Query
-from pydantic import BaseModel
-from typing import Optional
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 import requests
-import time
 import os
-from dotenv import load_dotenv
-from base64 import b64encode
 
-# === Load credentials ===
-load_dotenv()
-EBAY_CLIENT_ID = os.getenv("EBAY_CLIENT_ID")
-EBAY_CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET")
-EBAY_MARKETPLACE_ID = "EBAY_US"
+app = FastAPI()
 
-app = FastAPI(title="eBay AI Assistant", version="2.0.0")
+# CORS configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# === Token cache ===
-access_token_cache = {
-    "token": None,
-    "expires_at": 0
-}
+# Environment variables
+EBAY_CLIENT_ID = os.getenv("EBAY_CLIENT_ID", "DanyAziz-akaxqc-PRD-8ca4033b2-3ebe98a8")
+EBAY_CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET", "PRD-8e9abf40e836-f10b-43b4-ac6c-a370")
 
-# === Fetch eBay OAuth Token ===
+# Encode credentials
+import base64
+BASIC_AUTH = base64.b64encode(f"{EBAY_CLIENT_ID}:{EBAY_CLIENT_SECRET}".encode()).decode()
+
 def get_ebay_access_token():
-    if time.time() < access_token_cache["expires_at"]:
-        return access_token_cache["token"]
-
-    if not EBAY_CLIENT_ID or not EBAY_CLIENT_SECRET:
-        raise ValueError("❌ Missing EBAY_CLIENT_ID or EBAY_CLIENT_SECRET. Check your .env or Render Environment Variables.")
-
-    token_url = "https://api.ebay.com/identity/v1/oauth2/token"
-    credentials = f"{EBAY_CLIENT_ID}:{EBAY_CLIENT_SECRET}"
-    encoded_credentials = b64encode(credentials.encode()).decode()
-
+    url = "https://api.ebay.com/identity/v1/oauth2/token"
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
-        "Authorization": f"Basic {encoded_credentials}"
+        "Authorization": f"Basic {BASIC_AUTH}"
     }
     data = {
         "grant_type": "client_credentials",
-        "scope": "https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/buy.browse"
+        "scope": "https://api.ebay.com/oauth/api_scope"
     }
 
-    response = requests.post(token_url, headers=headers, data=data)
+    response = requests.post(url, headers=headers, data=data)
+
     if response.status_code != 200:
         print("🔴 Token request failed:", response.status_code, response.text)
-    response.raise_for_status()
+        response.raise_for_status()
 
-    result = response.json()
-    access_token_cache["token"] = result["access_token"]
-    access_token_cache["expires_at"] = time.time() + int(result["expires_in"]) - 60
+    access_token = response.json().get("access_token")
+    print("🟢 Access token retrieved.")
+    return access_token
 
-    return result["access_token"]
+@app.get("/")
+def root():
+    return {"message": "eBay AI Backend is running."}
 
-# === Search eBay for live listings ===
-@app.get("/price-check-live", operation_id="price_check_live")
-def price_check_live(query: str = Query(..., description="Search term"), limit: int = Query(5, ge=1, le=20)):
-    token = get_ebay_access_token()
+@app.get("/price-check-live")
+def price_check_live(query: str = "iphone", limit: int = 5):
+    try:
+        token = get_ebay_access_token()
+    except Exception as e:
+        return {"error": "Token retrieval failed", "details": str(e)}
 
-    url = "https://api.ebay.com/buy/browse/v1/item_summary/search"
-    params = {
-        "q": query,
-        "limit": limit
-    }
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "X-EBAY-C-MARKETPLACE-ID": EBAY_MARKETPLACE_ID,
-        "Content-Type": "application/json"
-    }
-
-    response = requests.get(url, headers=headers, params=params)
-    if response.status_code != 200:
-        print("🔴 Search failed:", response.status_code, response.text)
-    response.raise_for_status()
-
-    items = response.json().get("itemSummaries", [])
-
-    if not items:
-        return {"query": query, "message": "No results found."}
-
-    prices = []
-    for item in items:
-        price_info = item.get("price", {})
-        value = price_info.get("value")
-        if value is not None:
-            try:
-                prices.append(float(value))
-            except ValueError:
-                continue
-
-    if not prices:
-        return {"query": query, "message": "No valid prices found."}
-
-    avg_price = round(sum(prices) / len(prices), 2)
-
-    simplified_results = [
-        {
-            "title": item.get("title"),
-            "price": item.get("price", {}).get("value"),
-            "currency": item.get("price", {}).get("currency"),
-            "url": item.get("itemWebUrl")
-        }
-        for item in items
-    ]
-
+    # 🔧 MOCK RESPONSE (until buy.browse scope is approved)
     return {
         "query": query,
-        "results_found": len(items),
-        "average_price": avg_price,
-        "lowest_price": min(prices),
-        "highest_price": max(prices),
-        "items": simplified_results
+        "results": [
+            {
+                "title": f"{query} - Example Item {i+1}",
+                "price": f"${100 + i * 10}",
+                "url": "https://www.ebay.com/",
+                "condition": "Used",
+                "location": "USA"
+            } for i in range(limit)
+        ],
+        "note": "Mock results shown. Live data will appear after scope approval."
     }
-
-# === Optional /ask endpoint for ChatGPT ===
-class PromptRequest(BaseModel):
-    prompt: str
-
-@app.post("/ask", operation_id="ask_endpoint")
-def ask_endpoint(data: PromptRequest):
-    return {"reply": f"You said: {data.prompt}"}
