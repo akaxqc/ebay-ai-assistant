@@ -1,95 +1,101 @@
 from fastapi import FastAPI, Query
 from pydantic import BaseModel
 from typing import Optional, List
-from fastapi.openapi.utils import get_openapi
+import requests
+import hashlib
+import time
+from base64 import b64encode
 
-app = FastAPI(title="eBay AI Assistant", version="1.0.0")
+app = FastAPI(title="eBay AI Assistant", version="2.0.0")
 
-# === Root Welcome Endpoint ===
-@app.get("/")
-def read_root():
-    return {"message": "Your GPT-powered eBay Assistant is running!"}
+# === eBay API Credentials ===
+EBAY_CLIENT_ID = "DanyAziz-akaxqc-PRD-8ca4033b2-3ebe98a8"
+EBAY_CLIENT_SECRET = "PRD-ca4033b2c96e-3fb3-45ba-a331-b00a"
+EBAY_MARKETPLACE_ID = "EBAY_US"
 
-# === Simple Greeting Endpoint ===
-@app.get("/hello")
-def say_hello(name: str = "there"):
-    return {"message": f"Hello, {name}!"}
+# === Global Token Cache ===
+access_token_cache = {
+    "token": None,
+    "expires_at": 0
+}
 
-# === Simulated eBay Price Lookup (for testing without real API) ===
-@app.get("/fake_ebay_search")
-def fake_ebay_search(
-    query: str,
-    category: Optional[str] = None,
-    min_price: Optional[float] = None,
-    max_price: Optional[float] = None
-):
-    # Simulated local database
-    sample_database = {
-        "iphone 14": [
-            {"title": "iPhone 14 - 128GB - Unlocked", "price": 329.99, "category": "electronics"},
-            {"title": "iPhone 14 - Like New", "price": 349.00, "category": "electronics"},
-            {"title": "iPhone 14 Black", "price": 341.99, "category": "electronics"}
-        ],
-        "airpods": [
-            {"title": "AirPods Pro - Gen 2", "price": 179.99, "category": "electronics"},
-            {"title": "Apple AirPods - New", "price": 129.00, "category": "electronics"},
-            {"title": "Used AirPods Gen 1", "price": 89.99, "category": "electronics"}
-        ],
-        "jordans": [
-            {"title": "Jordan 1 Retro High OG", "price": 210.00, "category": "shoes"},
-            {"title": "Jordan 4 Thunder", "price": 235.00, "category": "shoes"},
-            {"title": "Jordan 11 Low", "price": 199.99, "category": "shoes"}
-        ]
+# === OAuth Token Fetcher ===
+def get_ebay_access_token():
+    if time.time() < access_token_cache["expires_at"]:
+        return access_token_cache["token"]
+
+    token_url = "https://api.ebay.com/identity/v1/oauth2/token"
+    credentials = f"{EBAY_CLIENT_ID}:{EBAY_CLIENT_SECRET}"
+    encoded_credentials = b64encode(credentials.encode()).decode()
+
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": f"Basic {encoded_credentials}"
+    }
+    data = {
+        "grant_type": "client_credentials",
+        "scope": "https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/buy.browse"
     }
 
-    results = sample_database.get(query.lower(), [])
+    response = requests.post(token_url, headers=headers, data=data)
+    response.raise_for_status()
+    result = response.json()
 
-    # Apply optional filters
-    filtered_results = [
-        item for item in results
-        if (category is None or item["category"] == category)
-        and (min_price is None or item["price"] >= min_price)
-        and (max_price is None or item["price"] <= max_price)
-    ]
+    access_token_cache["token"] = result["access_token"]
+    access_token_cache["expires_at"] = time.time() + int(result["expires_in"]) - 60
 
-    if not filtered_results:
-        return {
-            "query": query,
-            "message": "No matching items found with current filters."
+    return result["access_token"]
+
+# === Real eBay Price Check Endpoint ===
+@app.get("/price-check-live")
+def price_check_live(query: str, limit: int = 5):
+    token = get_ebay_access_token()
+
+    url = f"https://api.ebay.com/buy/browse/v1/item_summary/search"
+    params = {
+        "q": query,
+        "limit": limit
+    }
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-EBAY-C-MARKETPLACE-ID": EBAY_MARKETPLACE_ID,
+        "Content-Type": "application/json"
+    }
+
+    response = requests.get(url, headers=headers, params=params)
+    response.raise_for_status()
+    items = response.json().get("itemSummaries", [])
+
+    if not items:
+        return {"query": query, "message": "No results found."}
+
+    prices = [float(item["price"]["value"]) for item in items if "price" in item]
+    avg_price = round(sum(prices) / len(prices), 2)
+
+    simplified_results = [
+        {
+            "title": item.get("title"),
+            "price": item["price"]["value"],
+            "currency": item["price"]["currency"],
+            "url": item.get("itemWebUrl")
         }
-
-    average_price = sum(item["price"] for item in filtered_results) / len(filtered_results)
+        for item in items
+    ]
 
     return {
         "query": query,
-        "category": category or "any",
-        "min_price": min_price,
-        "max_price": max_price,
-        "average_price": round(average_price, 2),
-        "items_found": len(filtered_results),
-        "results": filtered_results
+        "results_found": len(items),
+        "average_price": avg_price,
+        "lowest_price": min(prices),
+        "highest_price": max(prices),
+        "items": simplified_results
     }
 
-# === Simple GPT Echo Endpoint ===
+# === Optional Echo Endpoint for GPT ===
 class PromptRequest(BaseModel):
     prompt: str
 
 @app.post("/ask")
 def ask_endpoint(data: PromptRequest):
     return {"reply": f"You said: {data.prompt}"}
-
-# === Custom OpenAPI Docs URL (for GPT integration) ===
-def custom_openapi():
-    if app.openapi_schema:
-        return app.openapi_schema
-    openapi_schema = get_openapi(
-        title=app.title,
-        version=app.version,
-        description="Simulated eBay AI Assistant API for GPT interaction.",
-        routes=app.routes,
-    )
-    openapi_schema["servers"] = [{"url": "https://ebay-ai-backend.onrender.com"}]
-    app.openapi_schema = openapi_schema
-    return app.openapi_schema
-
-app.openapi = custom_openapi
+    
