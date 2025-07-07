@@ -63,4 +63,14 @@ def fake_ebay_search(
         "items_found": len(filtered_results),
         "results": filtered_results
     }
-    
+    from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI()
+
+class PromptRequest(BaseModel):
+    prompt: str
+
+@app.post("/ask")
+def ask_endpoint(data: PromptRequest):
+    return {"reply": f"You said: {data.prompt}"}
