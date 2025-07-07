@@ -7,7 +7,7 @@ import os
 from dotenv import load_dotenv
 from base64 import b64encode
 
-# === Load credentials from .env ===
+# === Load credentials ===
 load_dotenv()
 EBAY_CLIENT_ID = os.getenv("EBAY_CLIENT_ID")
 EBAY_CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET")
@@ -15,21 +15,19 @@ EBAY_MARKETPLACE_ID = "EBAY_US"
 
 app = FastAPI(title="eBay AI Assistant", version="2.0.0")
 
-# === Global token cache ===
+# === Token cache ===
 access_token_cache = {
     "token": None,
     "expires_at": 0
 }
 
-# === Root route (prevents 404 on Render home) ===
-@app.get("/")
-def root():
-    return {"status": "🟢 eBay AI Backend is running."}
-
-# === OAuth: get eBay access token ===
+# === Fetch eBay OAuth Token ===
 def get_ebay_access_token():
     if time.time() < access_token_cache["expires_at"]:
         return access_token_cache["token"]
+
+    if not EBAY_CLIENT_ID or not EBAY_CLIENT_SECRET:
+        raise ValueError("❌ Missing EBAY_CLIENT_ID or EBAY_CLIENT_SECRET. Check your .env or Render Environment Variables.")
 
     token_url = "https://api.ebay.com/identity/v1/oauth2/token"
     credentials = f"{EBAY_CLIENT_ID}:{EBAY_CLIENT_SECRET}"
@@ -45,21 +43,26 @@ def get_ebay_access_token():
     }
 
     response = requests.post(token_url, headers=headers, data=data)
+    if response.status_code != 200:
+        print("🔴 Token request failed:", response.status_code, response.text)
     response.raise_for_status()
-    result = response.json()
 
+    result = response.json()
     access_token_cache["token"] = result["access_token"]
     access_token_cache["expires_at"] = time.time() + int(result["expires_in"]) - 60
 
     return result["access_token"]
 
-# === Price Check Endpoint (live listings only) ===
+# === Search eBay for live listings ===
 @app.get("/price-check-live", operation_id="price_check_live")
 def price_check_live(query: str = Query(..., description="Search term"), limit: int = Query(5, ge=1, le=20)):
     token = get_ebay_access_token()
 
     url = "https://api.ebay.com/buy/browse/v1/item_summary/search"
-    params = {"q": query, "limit": limit}
+    params = {
+        "q": query,
+        "limit": limit
+    }
     headers = {
         "Authorization": f"Bearer {token}",
         "X-EBAY-C-MARKETPLACE-ID": EBAY_MARKETPLACE_ID,
@@ -67,7 +70,10 @@ def price_check_live(query: str = Query(..., description="Search term"), limit: 
     }
 
     response = requests.get(url, headers=headers, params=params)
+    if response.status_code != 200:
+        print("🔴 Search failed:", response.status_code, response.text)
     response.raise_for_status()
+
     items = response.json().get("itemSummaries", [])
 
     if not items:
@@ -75,11 +81,13 @@ def price_check_live(query: str = Query(..., description="Search term"), limit: 
 
     prices = []
     for item in items:
-        try:
-            value = float(item.get("price", {}).get("value", 0))
-            prices.append(value)
-        except (ValueError, TypeError):
-            continue
+        price_info = item.get("price", {})
+        value = price_info.get("value")
+        if value is not None:
+            try:
+                prices.append(float(value))
+            except ValueError:
+                continue
 
     if not prices:
         return {"query": query, "message": "No valid prices found."}
@@ -105,7 +113,7 @@ def price_check_live(query: str = Query(..., description="Search term"), limit: 
         "items": simplified_results
     }
 
-# === Optional echo endpoint for GPT testing ===
+# === Optional /ask endpoint for ChatGPT ===
 class PromptRequest(BaseModel):
     prompt: str
 
