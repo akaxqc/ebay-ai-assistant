@@ -13,7 +13,7 @@ EBAY_CLIENT_ID = os.getenv("EBAY_CLIENT_ID")
 EBAY_CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET")
 EBAY_MARKETPLACE_ID = "EBAY_US"
 
-app = FastAPI(title="eBay AI Assistant", version="2.0.0")
+app = FastAPI(title="eBay AI Assistant", version="2.1.0")
 
 # === Global Token Cache ===
 access_token_cache = {
@@ -87,15 +87,28 @@ def price_check_live(query: str = Query(..., description="Search term"), limit: 
 
     avg_price = round(sum(prices) / len(prices), 2)
 
-    simplified_results = [
-        {
+    # === Enhanced output ===
+    simplified_results = []
+    for item in items:
+        price = item.get("price", {})
+        shipping = item.get("shippingOptions", [{}])[0] if item.get("shippingOptions") else {}
+        shipping_cost = shipping.get("shippingCost", {})
+        seller = item.get("seller", {})
+
+        simplified_results.append({
             "title": item.get("title"),
-            "price": item.get("price", {}).get("value"),
-            "currency": item.get("price", {}).get("currency"),
-            "url": item.get("itemWebUrl")
-        }
-        for item in items
-    ]
+            "price": price.get("value"),
+            "currency": price.get("currency"),
+            "url": item.get("itemWebUrl"),
+            "condition": item.get("condition"),
+            "is_top_rated": item.get("topRatedBuyingExperienceEligible"),
+            "seller_username": seller.get("username"),
+            "feedback_score": seller.get("feedbackScore"),
+            "is_free_shipping": shipping_cost.get("value") == 0,
+            "shipping_cost": shipping_cost.get("value"),
+            "item_location": item.get("itemLocation", {}).get("postalCode"),
+            "category": item.get("categoryPath")
+        })
 
     return {
         "query": query,
